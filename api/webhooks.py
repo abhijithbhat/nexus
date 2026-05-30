@@ -34,7 +34,11 @@ async def webhook_whatsapp(
     form_params = dict(parse_qsl(form_data_str))
     
     whatsapp = request.app.state.whatsapp
-    url = str(request.url)
+    # Reconstruct original URL from proxy headers for Twilio signature validation
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.url.netloc)
+    query_string = f"?{request.url.query}" if request.url.query else ""
+    url = f"{scheme}://{host}{request.url.path}{query_string}"
     
     # Validate request signature
     if not whatsapp.validate_request(url, form_params, x_twilio_signature):

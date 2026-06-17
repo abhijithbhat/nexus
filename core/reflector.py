@@ -64,7 +64,7 @@ class NexusReflector:
             f"  \"strengths\": [\"...\"],\n"
             f"  \"weaknesses\": [\"...\"],\n"
             f"  \"user_needs_unmet\": [\"...\"],\n"
-            f"  \"new_user_facts\": [{{\"subject\": \"Abhijith\", \"predicate\": \"...\", \"object\": \"...\"}}],\n"
+            f"  \"new_user_facts\": [{{\"subject\": \"{settings.user_name}\", \"predicate\": \"...\", \"object\": \"...\"}}],\n"
             f"  \"tomorrow_changes\": [\"...\"],\n"
             f"  \"proactive_tomorrow\": [\"...\"]\n"
             f"}}"

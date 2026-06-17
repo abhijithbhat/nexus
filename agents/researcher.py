@@ -13,8 +13,26 @@ class ResearcherAgent:
     async def run(self, task: str, context: str) -> str:
         logger.info(f"ResearcherAgent starting task: '{task}'")
         
+        # Optimize query for search engine
+        system_prompt = (
+            "You are a search query optimizer. Convert the user's research task into a single, clean, "
+            "effective search engine query (keywords only, no conversational filler like 'find out', 'search for', 'please', etc.). "
+            "CRITICAL: Do NOT use advanced search operators like 'site:', 'filetype:', OR quotes. Just return the raw keywords."
+        )
+        try:
+            search_query = await self.gemini_client.generate(
+                system_prompt=system_prompt,
+                user_message=task,
+                temperature=0.1
+            )
+            search_query = search_query.strip().strip('"').strip("'")
+            logger.info(f"Optimized search query: '{search_query}'")
+        except Exception as e:
+            logger.warning(f"Failed to optimize search query: {e}. Using raw task.")
+            search_query = task
+
         # 1. Query web search
-        results = await self.web_search.search(task, max_results=5)
+        results = await self.web_search.search(search_query, max_results=5)
         if not results:
             return "No web results found for this research topic."
             

@@ -34,10 +34,16 @@ class WebSearchConnector:
 
     async def search(self, query: str, max_results: int = 5) -> list[dict]:
         try:
+            # Clean query: replace hyphens/punctuation with spaces and remove double spaces
+            clean_query = query.replace("-", " ")
+            clean_query = "".join([c if c.isalnum() or c.isspace() else " " for c in clean_query])
+            clean_query = " ".join(clean_query.split())
+            logger.info(f"Original search query: '{query}' -> Cleaned search query: '{clean_query}'")
+
             def sync_search():
                 with DDGS() as ddgs:
                     # Retrieve web search listings
-                    return list(ddgs.text(query, max_results=max_results))
+                    return list(ddgs.text(clean_query, max_results=max_results))
 
             raw_results = await asyncio.to_thread(sync_search)
             

@@ -62,7 +62,7 @@ class MemoryManager:
             extract_system = (
                 "You are an information extraction assistant. Your job is to extract entities and facts from the text.\n"
                 "Entity types: person, project, topic, place, tool\n"
-                "Fact format: subject, predicate, object (e.g. Abhijith, uses, Python)\n"
+                "Fact format: subject, predicate, object (e.g. User, uses, Python)\n"
                 "Return ONLY JSON."
             )
             extract_user = (

@@ -12,7 +12,6 @@ class GeminiUnavailableError(Exception):
     pass
 
 class GeminiClient:
-    MODEL_NAME = "gemini-2.5-flash"
     MAX_RETRIES = 3
     BASE_RETRY_DELAY = 2.0
     
@@ -20,6 +19,7 @@ class GeminiClient:
     _rate_limit_lock = asyncio.Lock()
     
     def __init__(self):
+        self.MODEL_NAME = settings.gemini_model
         api_key = settings.gemini_api_key
         if not api_key or "your_gemini_api" in api_key:
             logger.warning("GEMINI_API_KEY is not configured or is a placeholder. Gemini calls will fail.")

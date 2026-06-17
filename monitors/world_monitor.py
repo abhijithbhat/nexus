@@ -160,7 +160,7 @@ class WorldMonitor:
             f"🏆 HACKATHONS\n"
             f"[1-2 upcoming, with deadline]\n\n"
             f"💡 TODAY'S PICK\n"
-            f"[One recommendation from NEXUS — what should Abhijith pay attention to today and why]"
+            f"[One recommendation from NEXUS — what should {settings.user_name} pay attention to today and why]"
         )
         
         try:

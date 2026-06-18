@@ -1,4 +1,4 @@
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.config import settings
 from utils.logger import get_logger
 
@@ -6,7 +6,7 @@ logger = get_logger(__name__)
 
 class CommunicatorAgent:
     def __init__(self):
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
 
     async def run(self, task: str, context: str, output_type: str = "message") -> str:
         logger.info(f"CommunicatorAgent starting draft for task: '{task}'")
@@ -25,7 +25,7 @@ class CommunicatorAgent:
         )
         
         try:
-            response = await self.gemini_client.generate(
+            response = await self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=user_message,
                 temperature=0.8

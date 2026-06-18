@@ -237,7 +237,7 @@ class MemoryManager:
                 )
                 
                 try:
-                    chunk_result = await self.gemini_client.generate_json(
+                    chunk_result = await self._utility_client.generate_json(
                         system_prompt, user_message, temperature=0.1
                     )
                     chunk_summaries.append(chunk_result)

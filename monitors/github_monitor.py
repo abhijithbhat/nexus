@@ -1,6 +1,6 @@
 import httpx
 from html.parser import HTMLParser
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -64,7 +64,7 @@ class GithubHTMLParser(HTMLParser):
 
 class GitHubMonitor:
     def __init__(self):
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
 
     async def fetch_trending(self, language: str = "python", since: str = "daily") -> list[dict]:
         logger.info(f"GitHubMonitor fetching trending for language: {language}, since: {since}")
@@ -108,7 +108,7 @@ class GitHubMonitor:
         )
         
         try:
-            plan = await self.gemini_client.generate_json(system_prompt, user_message, temperature=0.1)
+            plan = await self.llm.generate_json(system_prompt, user_message, temperature=0.1)
             score = float(plan.get("score", 0.0))
             return score
         except Exception as e:

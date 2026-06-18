@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 import pytz
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.logger import get_logger
 from memory.memory_manager import MemoryManager
 
@@ -10,7 +10,7 @@ logger = get_logger(__name__)
 class SchedulerAgent:
     def __init__(self, memory_manager: MemoryManager):
         self.memory_manager = memory_manager
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
 
     async def run(self, task: str, context: str) -> str:
         logger.info(f"SchedulerAgent starting task: '{task}'")
@@ -33,7 +33,7 @@ class SchedulerAgent:
         )
         
         try:
-            details = await self.gemini_client.generate_json(system_prompt, user_message)
+            details = await self.llm.generate_json(system_prompt, user_message)
             
             title = details.get("title", "Event")
             description = details.get("description", "")

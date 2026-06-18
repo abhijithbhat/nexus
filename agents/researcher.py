@@ -1,6 +1,6 @@
 import asyncio
 from connectors.web_search import WebSearchConnector
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 class ResearcherAgent:
     def __init__(self):
         self.web_search = WebSearchConnector()
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
 
     async def run(self, task: str, context: str) -> str:
         logger.info(f"ResearcherAgent starting task: '{task}'")
@@ -20,7 +20,7 @@ class ResearcherAgent:
             "CRITICAL: Do NOT use advanced search operators like 'site:', 'filetype:', OR quotes. Just return the raw keywords."
         )
         try:
-            search_query = await self.gemini_client.generate(
+            search_query = await self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=task,
                 temperature=0.1
@@ -79,7 +79,7 @@ class ResearcherAgent:
         )
         
         try:
-            report = await self.gemini_client.generate(
+            report = await self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=user_message,
                 temperature=0.2

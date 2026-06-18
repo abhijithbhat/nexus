@@ -1,7 +1,7 @@
 import ast
 import re
 import subprocess
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 class CoderAgent:
     def __init__(self):
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
 
     def _is_code_safe(self, code: str) -> tuple[bool, list[str]]:
         """Use AST parsing for real safety analysis instead of string matching."""
@@ -68,7 +68,7 @@ class CoderAgent:
         
         code = ""
         try:
-            raw_response = await self.gemini_client.generate(
+            raw_response = await self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=task,
                 temperature=0.2

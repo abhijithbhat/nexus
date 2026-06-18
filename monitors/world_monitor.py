@@ -3,7 +3,7 @@ from datetime import datetime
 import asyncio
 from utils.config import settings
 from utils.logger import get_logger
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.seen_tracker import SeenTracker
 from memory.memory_manager import MemoryManager
 from connectors.whatsapp import WhatsAppConnector
@@ -18,7 +18,7 @@ class WorldMonitor:
     def __init__(self, memory_manager: MemoryManager, whatsapp: WhatsAppConnector):
         self.memory_manager = memory_manager
         self.whatsapp = whatsapp
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
         self.seen_tracker = SeenTracker()
         
         self.arxiv = ArxivMonitor()
@@ -83,7 +83,7 @@ class WorldMonitor:
                 f"Return JSON: {{\"score\": 0.XX}}"
             )
             try:
-                res = await self.gemini_client.generate_json(sys_p, usr_m, temperature=0.1)
+                res = await self.llm.generate_json(sys_p, usr_m, temperature=0.1)
                 score = float(res.get("score", 0.0))
             except Exception:
                 score = 0.0
@@ -106,7 +106,7 @@ class WorldMonitor:
                 f"Return JSON: {{\"score\": 0.XX}}"
             )
             try:
-                res = await self.gemini_client.generate_json(sys_p, usr_m, temperature=0.1)
+                res = await self.llm.generate_json(sys_p, usr_m, temperature=0.1)
                 score = float(res.get("score", 0.0))
             except Exception:
                 score = 0.0
@@ -206,7 +206,7 @@ class WorldMonitor:
         )
         
         try:
-            brief = await self.gemini_client.generate(
+            brief = await self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=user_message,
                 temperature=0.7

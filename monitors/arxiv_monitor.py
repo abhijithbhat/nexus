@@ -3,14 +3,14 @@ import httpx
 import asyncio
 from datetime import datetime, timedelta
 import pytz
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 class ArxivMonitor:
     def __init__(self):
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
 
     async def fetch_new_papers(self, topics: list[str], days_back: int = 1) -> list[dict]:
         logger.info(f"ArxivMonitor starting fetch for topics: {topics}")
@@ -101,7 +101,7 @@ class ArxivMonitor:
         )
         
         try:
-            plan = await self.gemini_client.generate_json(system_prompt, user_message, temperature=0.1)
+            plan = await self.llm.generate_json(system_prompt, user_message, temperature=0.1)
             score = float(plan.get("score", 0.0))
             return score
         except Exception as e:

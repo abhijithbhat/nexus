@@ -1,5 +1,5 @@
 from connectors.gmail import GmailConnector
-from utils.gemini_client import GeminiClient
+from utils.llm_factory import get_primary_client
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 class GmailAgent:
     def __init__(self):
         self.gmail = GmailConnector()
-        self.gemini_client = GeminiClient()
+        self.llm = get_primary_client()
     
     async def run(self, task: str, context: str) -> str:
         task_lower = task.lower()
@@ -32,7 +32,7 @@ class GmailAgent:
         user_message = f"Task: {task}\nEmails:\n{emails}\nUser context: {context[:200]}"
         
         try:
-            summary = await self.gemini_client.generate(system_prompt, user_message, temperature=0.3)
+            summary = await self.llm.generate(system_prompt, user_message, temperature=0.3)
             return f"📧 **Email Summary**\n\n{summary}"
         except Exception as e:
             # Fallback: format manually
@@ -59,7 +59,7 @@ class GmailAgent:
         )
         
         try:
-            details = await self.gemini_client.generate_json(system_prompt, user_message)
+            details = await self.llm.generate_json(system_prompt, user_message)
             to = details.get("to", "")
             subject = details.get("subject", "")
             body = details.get("body", "")

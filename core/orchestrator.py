@@ -304,7 +304,10 @@ class NexusOrchestrator:
             .replace("{datetime}", now_ist)
         )
         
-        response = await self.gemini_client.generate(
+        # Use Groq as primary (fast + free), fall back to Gemini
+        primary = self.groq_client if self.groq_client.is_available else self.gemini_client
+        
+        response = await primary.generate(
             system_prompt=filled_prompt,
             user_message=state["user_input"]
         )

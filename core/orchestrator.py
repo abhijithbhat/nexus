@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, END
 from utils.config import settings
 from utils.logger import get_logger
 from utils.gemini_client import GeminiClient
+from utils.groq_client import GroqClient
 from memory.memory_manager import MemoryManager
 from core.session_manager import SessionManager
 from core.planner import TaskPlanner
@@ -67,10 +68,14 @@ class NexusOrchestrator:
     def __init__(self, memory_manager: MemoryManager, gemini_client: GeminiClient):
         self.memory_manager = memory_manager
         self.gemini_client = gemini_client
+        self.groq_client = GroqClient()
         self.session_manager = SessionManager()
-        self.planner = TaskPlanner(gemini_client)
+        
+        # Use Groq for utility calls (planner, goal tracker) when available
+        utility_client = self.groq_client if self.groq_client.is_available else gemini_client
+        self.planner = TaskPlanner(utility_client)
         self.goal_tracker = GoalTracker(
-            memory_manager.knowledge_graph, gemini_client, settings.user_goals
+            memory_manager.knowledge_graph, utility_client, settings.user_goals
         )
         
         # Deferred import to prevent circular dependency issues
@@ -88,7 +93,7 @@ class NexusOrchestrator:
         
         # Build and compile the workflow graph
         self.graph = self._build_graph()
-        logger.info("LangGraph orchestrator initialized and compiled.")
+        logger.info(f"LangGraph orchestrator initialized. Groq available: {self.groq_client.is_available}")
 
     async def load_session_node(self, state: NexusState) -> dict:
         history = await self.session_manager.get_formatted_history(state["from_number"])
@@ -160,16 +165,49 @@ class NexusOrchestrator:
         if task_plan.get("is_complex", False) and task_plan.get("steps"):
             return await self._execute_multi_step_plan(state, task_plan)
         
-        # Local keyword routing — no Gemini call, instant
-        agent = self._route_locally(state["user_input"])
-        task = state["user_input"]
+        # Try smart LLM routing via Groq (fast + free), fall back to keywords
+        if self.groq_client.is_available:
+            agent, task = await self._route_with_groq(state)
+        else:
+            agent = self._route_locally(state["user_input"])
+            task = state["user_input"]
         
-        logger.info(f"Routed to '{agent}' agent (keyword-based).")
-        plan = {"agent": agent, "task": task, "reason": "keyword match"}
+        logger.info(f"Routed to '{agent}' agent.")
+        plan = {"agent": agent, "task": task, "reason": "groq" if self.groq_client.is_available else "keyword"}
         return {
             "routing_plan": json.dumps(plan),
             "active_agent": agent
         }
+    
+    async def _route_with_groq(self, state: NexusState) -> tuple[str, str]:
+        """Use Groq (Llama 3.3) for intelligent routing — fast and free."""
+        system_prompt = (
+            "You are the routing intelligence of NEXUS. Pick the right agent for the user's message. "
+            "Output ONLY valid JSON with 'agent' and 'task' keys."
+        )
+        user_message = (
+            f"User message: {state['user_input']}\n"
+            f"Context: {state['user_context'][:300]}\n\n"
+            f"AGENTS:\n"
+            f"- researcher: web research, information lookup\n"
+            f"- coder: write/run code, scripts, technical solutions\n"
+            f"- scheduler: reminders, scheduling, calendar events\n"
+            f"- communicator: draft messages, emails, posts\n"
+            f"- gmail: check inbox, send/read emails\n"
+            f"- direct: greetings, opinions, casual chat, simple questions\n\n"
+            f'{{"agent": "one of the above", "task": "specific task for agent"}}'
+        )
+        try:
+            result = await self.groq_client.generate_json(system_prompt, user_message, temperature=0.1)
+            agent = result.get("agent", "direct")
+            valid = ["researcher", "coder", "scheduler", "communicator", "gmail", "direct"]
+            if agent not in valid:
+                agent = "direct"
+            task = result.get("task", state["user_input"])
+            return agent, task
+        except Exception as e:
+            logger.warning(f"Groq routing failed: {e}. Falling back to keywords.")
+            return self._route_locally(state["user_input"]), state["user_input"]
 
     async def _execute_multi_step_plan(self, state: NexusState, task_plan: dict) -> dict:
         """Execute multi-step plan sequentially, collecting results."""
@@ -297,8 +335,8 @@ class NexusOrchestrator:
                 importance=0.3
             )
         
-        # Check for goal milestones (skip for short/casual messages to save API calls)
-        if len(state['user_input']) > 30 and agent != 'direct':
+        # Check for goal milestones via Groq (fast + free, always-on)
+        if len(state['user_input']) > 25:
             try:
                 conversation = f"User: {state['user_input']}\nNEXUS: {result[:300]}"
                 milestone = await self.goal_tracker.check_for_milestone(conversation)
@@ -318,33 +356,26 @@ class NexusOrchestrator:
         result = state["agent_result"]
         agent = state["active_agent"]
         
-        # For direct responses or short results, skip the formatting Gemini call
+        # For direct responses or short results, skip formatting entirely
         if agent == "direct" or len(result) < 1500:
             return {"final_response": result[:1500]}
         
-        # Only use Gemini formatting for long agent outputs that need trimming
-        system_prompt = (
-            f"Format the following content as a WhatsApp message from NEXUS to {settings.user_name}. Rules:\n"
-            "- Maximum 1500 characters total\n"
-            "- Use line breaks generously for readability\n"
-            "- Use emoji only where it adds real meaning (not decoration)\n"
-            "- If content is longer than 1500 chars, prioritize the most important information and end with '...(more available on request)'\n"
-            "- Never start with 'I' — start with the substance\n"
-            "- No corporate-speak. Natural, warm, precise."
+        # Use Groq for fast formatting of long outputs (free + instant)
+        format_prompt = (
+            f"Format this as a WhatsApp message for {settings.user_name}. "
+            f"Max 1500 chars. Use line breaks. Prioritize important info. "
+            f"Natural tone, no corporate-speak."
         )
         
-        user_message = (
-            f"Agent used: {agent}\n"
-            f"Raw content to format:\n{result}"
-        )
+        formatter = self.groq_client if self.groq_client.is_available else self.gemini_client
         
         try:
-            formatted = await self.gemini_client.generate(
-                system_prompt=system_prompt,
-                user_message=user_message,
+            formatted = await formatter.generate(
+                system_prompt=format_prompt,
+                user_message=f"Agent: {agent}\nContent:\n{result}",
                 temperature=0.3
             )
-            return {"final_response": formatted}
+            return {"final_response": formatted[:1500]}
         except Exception as e:
             logger.error(f"Response formatting failed: {e}. Using raw text.")
             return {"final_response": result[:1500]}

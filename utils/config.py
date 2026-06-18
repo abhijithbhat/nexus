@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     deadline_check_interval_hours: int
     memory_consolidation_day: str = "sunday"
     gemini_model: str = "gemini-flash-latest"
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
 
     model_config = SettingsConfigDict(
         env_file=str(ROOT_DIR / ".env"),

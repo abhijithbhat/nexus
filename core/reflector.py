@@ -4,6 +4,7 @@ import pytz
 from utils.config import settings
 from utils.logger import get_logger
 from utils.gemini_client import GeminiClient
+from utils.groq_client import GroqClient
 from memory.memory_manager import MemoryManager
 
 logger = get_logger(__name__)
@@ -12,6 +13,7 @@ class NexusReflector:
     def __init__(self, memory_manager: MemoryManager, gemini_client: GeminiClient, whatsapp):
         self.memory_manager = memory_manager
         self.gemini_client = gemini_client
+        self.groq_client = GroqClient()
         self.whatsapp = whatsapp
 
     async def run_nightly_reflection(self) -> None:
@@ -149,7 +151,9 @@ class NexusReflector:
                 f"Return JSON: {{\"routing_hints\": [\"hint1\", \"hint2\"]}}"
             )
             
-            result = await self.gemini_client.generate_json(
+            # Use Groq for hint extraction (utility call), fall back to Gemini
+            hint_client = self.groq_client if self.groq_client.is_available else self.gemini_client
+            result = await hint_client.generate_json(
                 system_prompt, user_message, temperature=0.2
             )
             

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 from utils.gemini_client import GeminiClient
+from utils.groq_client import GroqClient
 from utils.logger import get_logger
 from memory.vector_store import VectorStore
 from memory.knowledge_graph import KnowledgeGraph
@@ -13,6 +14,10 @@ class MemoryManager:
         self.vector_store = VectorStore()
         self.knowledge_graph = KnowledgeGraph()
         self.gemini_client = GeminiClient()
+        self.groq_client = GroqClient()
+        # Use Groq for utility calls (entity extraction, scoring) when available
+        self._utility_client = self.groq_client if self.groq_client.is_available else self.gemini_client
+        logger.info(f"MemoryManager initialized. Utility LLM: {'Groq' if self.groq_client.is_available else 'Gemini'}")
 
     async def _score_importance(self, text: str, type: str, source: str) -> float:
         system_prompt = (
@@ -34,7 +39,7 @@ class MemoryManager:
         )
         
         try:
-            result = await self.gemini_client.generate_json(system_prompt, user_message, temperature=0.1)
+            result = await self._utility_client.generate_json(system_prompt, user_message, temperature=0.1)
             score = float(result.get("score", 0.3))
             logger.info(f"Memory relevance score: {score:.2f} for type={type}, reason={result.get('reason')}")
             return score
@@ -49,9 +54,11 @@ class MemoryManager:
             if fast is not None:
                 importance = fast
                 logger.info(f"Fast-scored importance: {importance:.2f} for type={type}")
+            elif self.groq_client.is_available:
+                # Use Groq for ambiguous scoring (fast + free)
+                importance = await self._score_importance(text, type, source)
             else:
-                # Default to 0.4 for ambiguous cases instead of calling Gemini
-                # This saves 1 API call per message on the free tier
+                # No Groq available, use safe default
                 importance = 0.4
                 logger.info(f"Default importance: {importance:.2f} for ambiguous type={type}")
             
@@ -90,7 +97,7 @@ class MemoryManager:
             )
             
             try:
-                extracted = await self.gemini_client.generate_json(extract_system, extract_user, temperature=0.1)
+                extracted = await self._utility_client.generate_json(extract_system, extract_user, temperature=0.1)
                 
                 # Add to knowledge graph
                 for entity in extracted.get("entities", []):

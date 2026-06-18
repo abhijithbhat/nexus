@@ -388,7 +388,8 @@ class NexusOrchestrator:
         await self.session_manager.add_message(
             state["from_number"], "assistant", state["final_response"][:500]
         )
-        return {}
+        # LangGraph requires every node to return at least one state key
+        return {"action_taken": state.get("action_taken", False)}
 
     def _build_graph(self):
         graph = StateGraph(NexusState)

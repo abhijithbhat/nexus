@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-flash-latest"
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
+    brave_search_api_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=str(ROOT_DIR / ".env"),

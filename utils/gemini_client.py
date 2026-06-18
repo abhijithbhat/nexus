@@ -23,7 +23,8 @@ class GeminiUnavailableError(Exception):
 
 class GeminiClient:
     MAX_RETRIES = 3
-    BASE_RETRY_DELAY = 2.0
+    BASE_RETRY_DELAY = 15.0   # Free tier needs longer waits between retries
+    MAX_RPM = 4               # Free tier limit is 5 RPM — stay under it
     
     _calls = deque()
     _rate_limit_lock = asyncio.Lock()
@@ -43,10 +44,10 @@ class GeminiClient:
             while cls._calls and now - cls._calls[0] > 60:
                 cls._calls.popleft()
             
-            if len(cls._calls) >= 30:
+            if len(cls._calls) >= cls.MAX_RPM:
                 sleep_time = 60 - (now - cls._calls[0]) + 0.1
                 if sleep_time > 0:
-                    logger.warning(f"Rate limit reached (>30 RPM). Sleeping for {sleep_time:.2f}s")
+                    logger.warning(f"Rate limit reached (>{cls.MAX_RPM} RPM). Sleeping for {sleep_time:.2f}s")
                     await asyncio.sleep(sleep_time)
                 # Recalculate after sleeping
                 now = time.time()

@@ -50,8 +50,10 @@ class MemoryManager:
                 importance = fast
                 logger.info(f"Fast-scored importance: {importance:.2f} for type={type}")
             else:
-                # Only call Gemini for ambiguous cases
-                importance = await self._score_importance(text, type, source)
+                # Default to 0.4 for ambiguous cases instead of calling Gemini
+                # This saves 1 API call per message on the free tier
+                importance = 0.4
+                logger.info(f"Default importance: {importance:.2f} for ambiguous type={type}")
             
         timestamp = datetime.utcnow().isoformat()
         metadata = {

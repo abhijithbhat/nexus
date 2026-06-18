@@ -103,8 +103,54 @@ class NexusOrchestrator:
         return {"user_context": context}
 
     async def plan_task_node(self, state: NexusState) -> dict:
-        plan = await self.planner.analyze(state["user_input"], state["user_context"])
-        return {"task_plan": json.dumps(plan), "plan_step_results": []}
+        """Local keyword-based complexity check. No Gemini call needed."""
+        text = state["user_input"].lower()
+        
+        # Only flag as complex if message explicitly chains multiple tasks
+        chain_words = [" then ", " and then ", " after that ", " followed by "]
+        is_complex = any(w in text for w in chain_words) and len(text) > 60
+        
+        if is_complex:
+            # Only call Gemini planner for genuinely complex multi-step requests
+            plan = await self.planner.analyze(state["user_input"], state["user_context"])
+            return {"task_plan": json.dumps(plan), "plan_step_results": []}
+        
+        return {"task_plan": "{}", "plan_step_results": []}
+
+    # ── Keyword-based routing (no Gemini call needed) ─────────────────
+    ROUTE_KEYWORDS = {
+        "researcher": [
+            "research", "find out", "what is", "latest on", "summarize",
+            "look up", "tell me about", "search for", "who is", "explain",
+            "how does", "what are", "news about", "trending"
+        ],
+        "coder": [
+            "write a script", "write code", "build a", "create a function",
+            "code that", "automate", "python", "program", "algorithm",
+            "debug", "fix this code", "implement"
+        ],
+        "scheduler": [
+            "remind me", "schedule", "add to calendar", "set alarm",
+            "deadline", "reminder", "event on", "don't forget"
+        ],
+        "communicator": [
+            "draft", "write an email", "compose", "prepare a message",
+            "write a letter", "write a post"
+        ],
+        "gmail": [
+            "check email", "check my email", "inbox", "unread email",
+            "send email", "send an email", "reply to email", "my emails"
+        ],
+    }
+
+    def _route_locally(self, text: str) -> str:
+        """Fast keyword-based routing. Returns agent name or 'direct'."""
+        text_lower = text.lower()
+        for agent, keywords in self.ROUTE_KEYWORDS.items():
+            for kw in keywords:
+                if kw in text_lower:
+                    return agent
+        return "direct"
 
     async def orchestrate_node(self, state: NexusState) -> dict:
         logger.info(f"Routing request: '{state['user_input'][:60]}'")
@@ -112,51 +158,18 @@ class NexusOrchestrator:
         # Check if task planner identified a multi-step plan
         task_plan = json.loads(state.get("task_plan", "{}"))
         if task_plan.get("is_complex", False) and task_plan.get("steps"):
-            # Execute multi-step plan sequentially
             return await self._execute_multi_step_plan(state, task_plan)
         
-        system_prompt = (
-            "You are the routing intelligence of NEXUS. Decide which specialized agent to use based on the user's message and context. Be precise."
-        )
+        # Local keyword routing — no Gemini call, instant
+        agent = self._route_locally(state["user_input"])
+        task = state["user_input"]
         
-        user_message = (
-            f"User message: {state['user_input']}\n\n"
-            f"User context summary: {state['user_context'][:500]}\n\n"
-            f"Relevant memory: {state['recalled_memory'][:300]}\n\n"
-            f"AVAILABLE AGENTS:\n"
-            f"- researcher: Use when user wants information researched from the web. Triggers: 'research', 'find out', 'what is', 'latest on', 'summarize', 'look up', 'tell me about'\n"
-            f"- coder: Use when user wants code written, a script built, or a technical solution generated. Triggers: 'write a script', 'build', 'create a function', 'code that does', 'automate'\n"
-            f"- scheduler: Use when user wants reminders, scheduling, or event management. Triggers: 'remind me', 'schedule', 'add to calendar', 'set alarm', 'deadline'\n"
-            f"- communicator: Use when user wants to draft a message, email, or document. Triggers: 'draft', 'write an email', 'compose', 'prepare a message'\n"
-            f"- gmail: Use when user wants to check email, read inbox, send email, or reply to email. Triggers: 'check email', 'inbox', 'unread', 'send email', 'reply to'\n"
-            f"- direct: Use for greetings, simple factual questions, opinions, casual conversation, anything that does not need web search or code.\n\n"
-            f"Output ONLY valid JSON:\n"
-            f"{{\n"
-            f"  \"agent\": \"researcher|coder|scheduler|communicator|gmail|direct\",\n"
-            f"  \"task\": \"specific task description for the agent\",\n"
-            f"  \"reason\": \"one sentence\"\n"
-            f"}}"
-        )
-        
-        try:
-            plan = await self.gemini_client.generate_json(system_prompt, user_message, temperature=0.1)
-            agent = plan.get("agent", "direct")
-            valid_agents = ["researcher", "coder", "scheduler", "communicator", "gmail", "direct"]
-            if agent not in valid_agents:
-                agent = "direct"
-                
-            logger.info(f"Routed to '{agent}' agent. Reason: {plan.get('reason')}")
-            return {
-                "routing_plan": json.dumps(plan),
-                "active_agent": agent
-            }
-        except Exception as e:
-            logger.error(f"Routing failed: {e}. Defaulting to direct_response.")
-            fallback_plan = {"agent": "direct", "task": state["user_input"], "reason": f"Routing error: {e}"}
-            return {
-                "routing_plan": json.dumps(fallback_plan),
-                "active_agent": "direct"
-            }
+        logger.info(f"Routed to '{agent}' agent (keyword-based).")
+        plan = {"agent": agent, "task": task, "reason": "keyword match"}
+        return {
+            "routing_plan": json.dumps(plan),
+            "active_agent": agent
+        }
 
     async def _execute_multi_step_plan(self, state: NexusState, task_plan: dict) -> dict:
         """Execute multi-step plan sequentially, collecting results."""
@@ -284,24 +297,32 @@ class NexusOrchestrator:
                 importance=0.3
             )
         
-        # Check for goal milestones
-        try:
-            conversation = f"User: {state['user_input']}\nNEXUS: {result[:300]}"
-            milestone = await self.goal_tracker.check_for_milestone(conversation)
-            if milestone:
-                celebration = milestone.get("celebration_message", "")
-                if celebration and result:
-                    # Append celebration to result
-                    return {
-                        "agent_result": f"{result}\n\n🎯 {celebration}",
-                        "action_taken": state.get("action_taken", False)
-                    }
-        except Exception as e:
-            logger.error(f"Goal tracking in store_memory failed: {e}")
+        # Check for goal milestones (skip for short/casual messages to save API calls)
+        if len(state['user_input']) > 30 and agent != 'direct':
+            try:
+                conversation = f"User: {state['user_input']}\nNEXUS: {result[:300]}"
+                milestone = await self.goal_tracker.check_for_milestone(conversation)
+                if milestone:
+                    celebration = milestone.get("celebration_message", "")
+                    if celebration and result:
+                        return {
+                            "agent_result": f"{result}\n\n🎯 {celebration}",
+                            "action_taken": state.get("action_taken", False)
+                        }
+            except Exception as e:
+                logger.error(f"Goal tracking in store_memory failed: {e}")
         
         return {"action_taken": state.get("action_taken", False)}
 
     async def format_response_node(self, state: NexusState) -> dict:
+        result = state["agent_result"]
+        agent = state["active_agent"]
+        
+        # For direct responses or short results, skip the formatting Gemini call
+        if agent == "direct" or len(result) < 1500:
+            return {"final_response": result[:1500]}
+        
+        # Only use Gemini formatting for long agent outputs that need trimming
         system_prompt = (
             f"Format the following content as a WhatsApp message from NEXUS to {settings.user_name}. Rules:\n"
             "- Maximum 1500 characters total\n"
@@ -313,8 +334,8 @@ class NexusOrchestrator:
         )
         
         user_message = (
-            f"Agent used: {state['active_agent']}\n"
-            f"Raw content to format:\n{state['agent_result']}"
+            f"Agent used: {agent}\n"
+            f"Raw content to format:\n{result}"
         )
         
         try:
@@ -326,7 +347,7 @@ class NexusOrchestrator:
             return {"final_response": formatted}
         except Exception as e:
             logger.error(f"Response formatting failed: {e}. Using raw text.")
-            return {"final_response": state["agent_result"][:1500]}
+            return {"final_response": result[:1500]}
 
     async def save_session_node(self, state: NexusState) -> dict:
         """Save user and assistant messages to session after response is formatted."""

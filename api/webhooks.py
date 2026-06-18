@@ -13,8 +13,19 @@ router = APIRouter()
 _rate_limits = {}
 _rate_limit_lock = asyncio.Lock()
 
-async def process_and_reply(orchestrator, whatsapp, body: str, from_number: str):
+async def process_and_reply(orchestrator, whatsapp, body: str, from_number: str, feedback_processor=None):
     try:
+        # Check for feedback signals before processing
+        if feedback_processor:
+            feedback = feedback_processor.detect_feedback(body)
+            if feedback:
+                feedback_processor.record_feedback(
+                    feedback["type"],
+                    context=body,
+                    response_summary=body[:100]
+                )
+                logger.info(f"Feedback detected and recorded: {feedback['type']}")
+        
         response = await orchestrator.process_message(body, from_number)
         if response and response != "Unauthorized":
             whatsapp.send_message(from_number, response)
@@ -62,13 +73,17 @@ async def webhook_whatsapp(
             raise HTTPException(status_code=429, detail="Too Many Requests")
         _rate_limits[from_number] = now
         
+    # Get feedback processor if available
+    feedback_proc = getattr(request.app.state, "feedback_processor", None)
+    
     # Execute processing async
     background_tasks.add_task(
         process_and_reply,
         request.app.state.orchestrator,
         whatsapp,
         body,
-        from_number
+        from_number,
+        feedback_proc
     )
     
     twiml_response = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'

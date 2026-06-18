@@ -1,10 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from utils.gemini_client import GeminiClient
 from utils.logger import get_logger
 from memory.memory_manager import MemoryManager
 
 logger = get_logger(__name__)
+
 
 class SchedulerAgent:
     def __init__(self, memory_manager: MemoryManager):
@@ -72,7 +73,24 @@ class SchedulerAgent:
                 importance=0.8
             )
             
-            return f"✅ Scheduled: {title}\n📅 {dt_ist_str}\n⏰ Reminder {reminder_min} min before"
+            # Optionally sync to Google Calendar
+            gcal_status = ""
+            try:
+                from connectors.gcalendar import GoogleCalendarConnector
+                gcal = GoogleCalendarConnector()
+                if gcal.is_available:
+                    end_dt = dt_utc + timedelta(hours=1)
+                    gcal.create_event(
+                        title=title,
+                        start_dt=dt_utc,
+                        end_dt=end_dt,
+                        description=description
+                    )
+                    gcal_status = "\n📆 Also added to Google Calendar"
+            except Exception as e:
+                logger.warning(f"Google Calendar sync failed (non-critical): {e}")
+            
+            return f"✅ Scheduled: {title}\n📅 {dt_ist_str}\n⏰ Reminder {reminder_min} min before{gcal_status}"
             
         except Exception as e:
             logger.error(f"Error in SchedulerAgent: {e}")

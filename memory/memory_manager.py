@@ -4,6 +4,7 @@ from utils.gemini_client import GeminiClient
 from utils.logger import get_logger
 from memory.vector_store import VectorStore
 from memory.knowledge_graph import KnowledgeGraph
+from memory.importance_scorer import fast_score
 
 logger = get_logger(__name__)
 
@@ -43,7 +44,14 @@ class MemoryManager:
 
     async def remember(self, text: str, type: str, source: str, importance: float = None) -> str:
         if importance is None:
-            importance = await self._score_importance(text, type, source)
+            # Try fast rule-based scorer first (saves ~80% of Gemini calls)
+            fast = fast_score(text, type, source)
+            if fast is not None:
+                importance = fast
+                logger.info(f"Fast-scored importance: {importance:.2f} for type={type}")
+            else:
+                # Only call Gemini for ambiguous cases
+                importance = await self._score_importance(text, type, source)
             
         timestamp = datetime.utcnow().isoformat()
         metadata = {
@@ -184,65 +192,78 @@ class MemoryManager:
 
     async def consolidate_memory(self):
         logger.info("Starting memory consolidation job...")
-        
-        # Fetch conversation memories older than 7 days
-        # Since we might not have a direct filter, let's query all conversation memories
-        # and filter them in memory
         try:
             all_conversations = self.vector_store.get_by_type("conversation", limit=500)
             cutoff = datetime.utcnow() - timedelta(days=7)
             
-            old_convs = []
-            for conv in all_conversations:
-                meta = conv["metadata"]
-                timestamp_val = meta.get("timestamp")
-                if timestamp_val is not None:
-                    if float(timestamp_val) < cutoff.timestamp():
-                        old_convs.append(conv)
-                        
+            old_convs = [
+                c for c in all_conversations
+                if float(c["metadata"].get("timestamp", 0)) < cutoff.timestamp()
+            ]
+            
             if not old_convs:
                 logger.info("No old conversations to consolidate.")
                 return
+            
+            logger.info(f"Consolidating {len(old_convs)} old conversations in chunks...")
+            
+            # CHUNK into groups of 30 to avoid token overflow
+            CHUNK_SIZE = 30
+            chunk_summaries = []
+            
+            for i in range(0, len(old_convs), CHUNK_SIZE):
+                chunk = old_convs[i:i + CHUNK_SIZE]
+                chunk_blob = "\n".join([
+                    f"({c['metadata'].get('timestamp_iso', '')}): {c['text']}"
+                    for c in chunk
+                ])
                 
-            logger.info(f"Consolidating {len(old_convs)} old conversations...")
+                system_prompt = (
+                    "Compress these conversation logs into key facts and preferences. "
+                    "Be highly concise. Return JSON only."
+                )
+                user_message = (
+                    f"Conversations:\n{chunk_blob}\n\n"
+                    f"Return JSON: {{\"key_facts\": [], \"preferences\": [], \"patterns\": []}}"
+                )
+                
+                try:
+                    chunk_result = await self.gemini_client.generate_json(
+                        system_prompt, user_message, temperature=0.1
+                    )
+                    chunk_summaries.append(chunk_result)
+                except Exception as e:
+                    logger.error(f"Error consolidating chunk {i}: {e}")
+                    continue
             
-            conversations_blob = "\n".join([f"({c['metadata'].get('timestamp_iso', '')}): {c['text']}" for c in old_convs])
+            if not chunk_summaries:
+                return
             
-            system_prompt = "You are a memory compressor for a personal AI. Synthesize conversation logs into core factual patterns."
-            user_message = (
-                f"Summarize the key facts, preferences, goals, and behavioral patterns revealed in these conversations. "
-                f"Be highly concise. Return JSON format only.\n\n"
-                f"Conversations:\n{conversations_blob}\n\n"
-                f"Return JSON format:\n"
-                f"{{\n"
-                f"  \"key_facts\": [\"...\"],\n"
-                f"  \"preferences\": [\"...\"],\n"
-                f"  \"patterns\": [\"...\"],\n"
-                f"  \"updated_goals\": [\"...\"]\n"
-                f"}}"
-            )
+            # Merge all chunk summaries
+            all_facts = []
+            all_prefs = []
+            all_patterns = []
+            for cs in chunk_summaries:
+                all_facts.extend(cs.get("key_facts", []))
+                all_prefs.extend(cs.get("preferences", []))
+                all_patterns.extend(cs.get("patterns", []))
             
-            consolidated = await self.gemini_client.generate_json(system_prompt, user_message, temperature=0.1)
-            
-            # Store summary in Vector Store
             summary_text = (
                 f"Consolidated memory summary (older than 7 days):\n"
-                f"Facts: {', '.join(consolidated.get('key_facts', []))}\n"
-                f"Preferences: {', '.join(consolidated.get('preferences', []))}\n"
-                f"Patterns: {', '.join(consolidated.get('patterns', []))}\n"
-                f"Goals: {', '.join(consolidated.get('updated_goals', []))}"
+                f"Facts: {', '.join(str(f) for f in all_facts[:20])}\n"
+                f"Preferences: {', '.join(str(p) for p in all_prefs[:20])}\n"
+                f"Patterns: {', '.join(str(p) for p in all_patterns[:20])}"
             )
             
             await self.remember(summary_text, "consolidated_summary", "consolidation_job", importance=0.95)
             
-            # Delete low-importance conversation logs
+            # Delete low-importance old conversations
             deleted_count = 0
             for conv in old_convs:
-                importance = float(conv["metadata"].get("importance", 0.0))
-                if importance < 0.5:
+                if float(conv["metadata"].get("importance", 0.0)) < 0.5:
                     self.vector_store.delete(conv["id"])
                     deleted_count += 1
-                    
+            
             logger.info(f"Consolidation complete. Deleted {deleted_count} low-importance memories.")
         except Exception as e:
             logger.error(f"Error in memory consolidation: {e}")

@@ -115,7 +115,55 @@ class NexusReflector:
             )
             
             self.whatsapp.send_message(settings.user_whatsapp_number, summary_msg)
+            
+            # ARCH 3: Self-improvement loop — extract routing hints
+            await self._improve_routing_hints(reflection_json)
+            
             logger.info("Nightly self-reflection finished and logged.")
             
         except Exception as e:
             logger.error(f"Error during nightly reflection run: {e}")
+    
+    async def _improve_routing_hints(self, reflection: dict):
+        """
+        Extract routing errors and quality issues from reflection.
+        Save as facts in the knowledge graph for future improvement.
+        """
+        try:
+            weaknesses = reflection.get("weaknesses", [])
+            changes = reflection.get("tomorrow_changes", [])
+            unmet = reflection.get("user_needs_unmet", [])
+            
+            if not weaknesses and not unmet:
+                return
+            
+            system_prompt = (
+                "You are an AI routing optimizer. Given reflection weaknesses and unmet needs, "
+                "extract routing improvement hints. These hints should be actionable rules like: "
+                "'When user says X, route to Y agent instead of Z.'"
+            )
+            user_message = (
+                f"Weaknesses: {json.dumps(weaknesses)}\n"
+                f"Unmet needs: {json.dumps(unmet)}\n"
+                f"Changes planned: {json.dumps(changes)}\n\n"
+                f"Return JSON: {{\"routing_hints\": [\"hint1\", \"hint2\"]}}"
+            )
+            
+            result = await self.gemini_client.generate_json(
+                system_prompt, user_message, temperature=0.2
+            )
+            
+            hints = result.get("routing_hints", [])
+            for hint in hints[:3]:  # Max 3 hints per night
+                self.memory_manager.knowledge_graph.add_fact(
+                    subject="NEXUS_ROUTING",
+                    predicate="improvement_hint",
+                    object=hint,
+                    confidence=0.7,
+                    source="self_improvement"
+                )
+            
+            if hints:
+                logger.info(f"Self-improvement: {len(hints)} routing hints saved.")
+        except Exception as e:
+            logger.error(f"Self-improvement hint extraction failed: {e}")

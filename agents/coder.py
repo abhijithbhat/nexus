@@ -1,3 +1,4 @@
+import ast
 import re
 import subprocess
 from utils.gemini_client import GeminiClient
@@ -5,15 +6,56 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-class CoderAgent:
-    FORBIDDEN = [
-        "os.system", "subprocess.run", "subprocess.call", "subprocess.Popen",
-        "eval(", "exec(", "__import__", "socket.", "urllib.request",
-        "open(", "os.remove", "os.rmdir", "shutil"
-    ]
 
+class CoderAgent:
     def __init__(self):
         self.gemini_client = GeminiClient()
+
+    def _is_code_safe(self, code: str) -> tuple[bool, list[str]]:
+        """Use AST parsing for real safety analysis instead of string matching."""
+        violations = []
+        
+        # 1. AST-level analysis
+        try:
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                # Block subprocess, os.system, eval, exec
+                if isinstance(node, ast.Call):
+                    func = node.func
+                    if isinstance(func, ast.Attribute):
+                        # Build dotted name like "os.system" or "subprocess.run"
+                        value_id = getattr(func.value, "id", "")
+                        full = f"{value_id}.{func.attr}"
+                        dangerous = [
+                            "subprocess.run", "subprocess.call", "subprocess.Popen",
+                            "subprocess.check_output", "subprocess.check_call",
+                            "os.system", "os.popen", "os.remove", "os.rmdir",
+                            "os.unlink", "os.rename", "shutil.rmtree", "shutil.move"
+                        ]
+                        for d in dangerous:
+                            if d in full:
+                                violations.append(f"Forbidden call: {full}")
+                    elif isinstance(func, ast.Name):
+                        if func.id in ["eval", "exec", "__import__", "compile"]:
+                            violations.append(f"Forbidden builtin: {func.id}")
+                        if func.id == "open":
+                            violations.append("Forbidden: open() file access")
+        except SyntaxError as e:
+            violations.append(f"Code has syntax error: {e}")
+        
+        # 2. Regex for obfuscation patterns
+        obfuscation_patterns = [
+            (r"__builtins__", "Accessing __builtins__"),
+            (r"getattr\s*\(", "Dynamic attribute access via getattr"),
+            (r"importlib", "Dynamic import via importlib"),
+            (r"ctypes", "Low-level ctypes access"),
+            (r"sys\.modules", "Module table manipulation"),
+        ]
+        for pattern, desc in obfuscation_patterns:
+            if re.search(pattern, code):
+                violations.append(f"Suspicious pattern: {desc}")
+        
+        return len(violations) == 0, violations
 
     async def run(self, task: str, context: str) -> str:
         logger.info(f"CoderAgent starting task: '{task}'")
@@ -42,12 +84,13 @@ class CoderAgent:
             else:
                 code = code_match.group(1)
 
-            # Safety check
-            found_restricted = [pat for pat in self.FORBIDDEN if pat in code]
-            if found_restricted:
-                logger.warning(f"Safety warning: code contained restricted statements: {found_restricted}")
+            # Safety check via AST analysis
+            is_safe, violations = self._is_code_safe(code)
+            if not is_safe:
+                logger.warning(f"Safety violations detected: {violations}")
                 return (
-                    f"⚠️ Code generated but not executed (contains restricted operations: {', '.join(found_restricted)}).\n"
+                    f"⚠️ Code generated but not executed (safety violations detected).\n"
+                    f"Violations: {', '.join(violations)}\n"
                     f"Review before running locally.\n\n"
                     f"```python\n{code}\n```"
                 )

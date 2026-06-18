@@ -1,4 +1,5 @@
 import os
+import math
 from uuid import uuid4
 from datetime import datetime, timedelta
 import chromadb
@@ -77,10 +78,32 @@ class VectorStore:
                     "metadata": metadatas[i],
                     "distance": distances[i]
                 })
+            
+            # Apply Ebbinghaus-inspired time decay
+            output = self._apply_decay(output)
             return output
         except Exception as e:
             logger.error(f"Error querying vector store: {e}")
             return []
+    
+    def _apply_decay(self, results: list[dict], half_life_days: float = 7.0) -> list[dict]:
+        """
+        Ebbinghaus-inspired exponential decay: recent memories ranked higher.
+        Decay factor halves every half_life_days.
+        """
+        now = datetime.utcnow().timestamp()
+        for r in results:
+            ts = float(r["metadata"].get("timestamp", now))
+            age_days = (now - ts) / 86400.0
+            decay = math.exp(-0.693 * age_days / half_life_days)  # ln(2) ≈ 0.693
+            importance = float(r["metadata"].get("importance", 0.5))
+            # Combine: lower distance = more similar, higher is better for decay & importance
+            similarity = max(0, 1 - r["distance"])
+            r["effective_score"] = similarity * decay * (0.5 + importance * 0.5)
+        
+        # Re-sort by effective score descending
+        results.sort(key=lambda x: x.get("effective_score", 0), reverse=True)
+        return results
 
     def delete(self, doc_id: str) -> bool:
         try:
@@ -121,25 +144,26 @@ class VectorStore:
             cutoff = datetime.utcnow() - timedelta(hours=hours)
             cutoff_epoch = cutoff.timestamp()
             
-            # ChromaDB supports filtering
-            results = self.collection.get(
-                where={"timestamp": {"$gte": cutoff_epoch}}
-            )
+            # ChromaDB .get() doesn't support $gte — fetch all, filter in Python
+            results = self.collection.get(include=["documents", "metadatas"])
             
             output = []
             if not results or not results.get("ids"):
                 return output
                 
             ids = results["ids"]
-            documents = results["documents"]
-            metadatas = results["metadatas"]
+            documents = results.get("documents", [])
+            metadatas = results.get("metadatas", [])
             
             for i in range(len(ids)):
-                output.append({
-                    "id": ids[i],
-                    "text": documents[i] if documents else "",
-                    "metadata": metadatas[i] if metadatas else {}
-                })
+                meta = metadatas[i] if metadatas else {}
+                ts = float(meta.get("timestamp", 0))
+                if ts >= cutoff_epoch:
+                    output.append({
+                        "id": ids[i],
+                        "text": documents[i] if documents else "",
+                        "metadata": meta
+                    })
             return output
         except Exception as e:
             logger.error(f"Error getting recent from vector store: {e}")

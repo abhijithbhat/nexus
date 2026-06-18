@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from utils.config import settings
 from utils.logger import get_logger, ROOT_DIR
 from utils.gemini_client import GeminiClient
+from utils.usage_tracker import UsageTracker
 from memory.memory_manager import MemoryManager
 from connectors.whatsapp import WhatsAppConnector
 from core.orchestrator import NexusOrchestrator
@@ -13,6 +14,7 @@ from api.webhooks import router as webhooks_router
 from api.admin import router as admin_router
 
 logger = get_logger(__name__)
+
 
 async def seed_first_run(memory_manager: MemoryManager):
     kg = memory_manager.knowledge_graph
@@ -51,6 +53,7 @@ async def seed_first_run(memory_manager: MemoryManager):
     else:
         logger.info("First-run seeding already complete.")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -63,21 +66,26 @@ async def lifespan(app: FastAPI):
     memory_manager = MemoryManager()
     gemini_client = GeminiClient()
     whatsapp = WhatsAppConnector()
+    usage_tracker = UsageTracker()
     orchestrator = NexusOrchestrator(memory_manager, gemini_client)
     
     from monitors.world_monitor import WorldMonitor
     from core.reflector import NexusReflector
+    from core.feedback import FeedbackProcessor
     
     world_monitor = WorldMonitor(memory_manager, whatsapp)
     reflector = NexusReflector(memory_manager, gemini_client, whatsapp)
+    feedback_processor = FeedbackProcessor(memory_manager.knowledge_graph)
     
     # Store on app.state
     app.state.memory_manager = memory_manager
     app.state.gemini_client = gemini_client
     app.state.whatsapp = whatsapp
+    app.state.usage_tracker = usage_tracker
     app.state.orchestrator = orchestrator
     app.state.world_monitor = world_monitor
     app.state.reflector = reflector
+    app.state.feedback_processor = feedback_processor
     
     # Seed first run user profile
     await seed_first_run(memory_manager)
@@ -102,7 +110,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
     logger.info("NEXUS is offline.")
 
-app = FastAPI(title="NEXUS", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="NEXUS", version="2.0.0", lifespan=lifespan)
 
 # Mount routers
 app.include_router(health_router)

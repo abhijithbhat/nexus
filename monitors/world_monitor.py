@@ -4,6 +4,7 @@ import asyncio
 from utils.config import settings
 from utils.logger import get_logger
 from utils.gemini_client import GeminiClient
+from utils.seen_tracker import SeenTracker
 from memory.memory_manager import MemoryManager
 from connectors.whatsapp import WhatsAppConnector
 from monitors.arxiv_monitor import ArxivMonitor
@@ -18,6 +19,7 @@ class WorldMonitor:
         self.memory_manager = memory_manager
         self.whatsapp = whatsapp
         self.gemini_client = GeminiClient()
+        self.seen_tracker = SeenTracker()
         
         self.arxiv = ArxivMonitor()
         self.github = GitHubMonitor()
@@ -47,22 +49,33 @@ class WorldMonitor:
         
         # Scorer functions
         async def score_paper(p):
+            paper_id = p.get("url", p.get("title", ""))
+            if self.seen_tracker.has_seen(paper_id):
+                return
             score = await self.arxiv.score_relevance(p, settings.user_interests)
             if score >= 0.6:
                 p["relevance_score"] = score
                 scored_papers.append(p)
                 txt = f"New ArXiv Paper: {p['title']} by {p['authors']}. Abstract: {p['abstract']}"
                 await self.memory_manager.remember(txt, "monitor_signal", "arxiv_monitor", importance=score)
+            self.seen_tracker.mark_seen(paper_id, p.get("title", ""))
 
         async def score_repo(r):
+            repo_id = r.get("url", r.get("name", ""))
+            if self.seen_tracker.has_seen(repo_id):
+                return
             score = await self.github.score_relevance(r, settings.user_interests)
             if score >= 0.6:
                 r["relevance_score"] = score
                 scored_repos.append(r)
                 txt = f"Trending Repo: {r['name']} ({r['language']}). Stars: {r['stars']}. Description: {r['description']}"
                 await self.memory_manager.remember(txt, "monitor_signal", "github_monitor", importance=score)
+            self.seen_tracker.mark_seen(repo_id, r.get("name", ""))
 
         async def score_news(n):
+            news_id = n.get("url", n.get("title", ""))
+            if self.seen_tracker.has_seen(news_id):
+                return
             sys_p = "You are a tech news relevance evaluator for a personal intelligence agent."
             usr_m = (
                 f"Rate 0.0-1.0 how relevant this news item is to someone with these interests: {settings.user_interests}\n\n"
@@ -80,8 +93,12 @@ class WorldMonitor:
                 scored_news.append(n)
                 txt = f"AI Tech News: {n['title']} ({n['source']}). Summary: {n['summary']}"
                 await self.memory_manager.remember(txt, "monitor_signal", "news_monitor", importance=score)
+            self.seen_tracker.mark_seen(news_id, n.get("title", ""))
 
         async def score_hackathon(h):
+            hack_id = h.get("url", h.get("name", ""))
+            if self.seen_tracker.has_seen(hack_id):
+                return
             sys_p = "You are a hackathon relevance evaluator for a personal intelligence agent."
             usr_m = (
                 f"Rate 0.0-1.0 how relevant this hackathon is to someone with these interests and goals: {settings.user_interests}, goals: {settings.user_goals}\n\n"
@@ -99,6 +116,7 @@ class WorldMonitor:
                 scored_hackathons.append(h)
                 txt = f"Hackathon Event: {h['name']} (Deadline: {h['registration_deadline']}). Theme: {h['theme']}. Prizes: {h['prize_pool']}"
                 await self.memory_manager.remember(txt, "monitor_signal", "hackathon_monitor", importance=score)
+            self.seen_tracker.mark_seen(hack_id, h.get("name", ""))
 
         # Build list of async scoring tasks
         tasks = []
@@ -133,8 +151,29 @@ class WorldMonitor:
             "scan_timestamp": datetime.utcnow().isoformat()
         }
 
+    async def _get_email_summary(self) -> str:
+        """Fetch unread email subjects for morning brief integration."""
+        try:
+            from connectors.gmail import GmailConnector
+            gmail = GmailConnector()
+            if not gmail.is_available:
+                return "Gmail not configured."
+            emails = gmail.get_unread_emails(max_results=5)
+            if not emails:
+                return "No unread emails."
+            summary = []
+            for e in emails[:3]:
+                from_name = e['from'].split('<')[0].strip() if '<' in e['from'] else e['from'][:30]
+                summary.append(f"• {from_name}: {e['subject'][:50]}")
+            return "\n".join(summary)
+        except Exception:
+            return "Could not fetch emails."
+
     async def generate_morning_brief(self, scan_results: dict) -> str:
         date_str = datetime.now().strftime("%Y-%m-%d")
+        
+        # Fetch email summary for morning brief
+        email_summary = await self._get_email_summary()
         
         system_prompt = (
             f"You are NEXUS preparing a morning intelligence brief for {settings.user_name}. "
@@ -148,9 +187,12 @@ class WorldMonitor:
             f"PAPERS: {json.dumps(scan_results['papers'][:3])}\n"
             f"GITHUB: {json.dumps(scan_results['repos'][:3])}\n"
             f"NEWS: {json.dumps(scan_results['news'][:3])}\n"
-            f"HACKATHONS: {json.dumps(scan_results['hackathons'][:2])}\n\n"
+            f"HACKATHONS: {json.dumps(scan_results['hackathons'][:2])}\n"
+            f"EMAILS: {email_summary}\n\n"
             f"Required format:\n"
             f"☀️ Morning Brief — {date_str} — {settings.user_name}\n\n"
+            f"📧 EMAILS\n"
+            f"[Unread email summary, 1-3 lines]\n\n"
             f"📄 PAPERS\n"
             f"[2-3 most relevant, one line each]\n\n"
             f"🔥 GITHUB\n"

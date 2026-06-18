@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     reflection_time: str
     monitor_interval_hours: int
     deadline_check_interval_hours: int
+    memory_consolidation_day: str = "sunday"
     gemini_model: str = "gemini-flash-latest"
 
     model_config = SettingsConfigDict(

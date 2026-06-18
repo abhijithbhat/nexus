@@ -8,6 +8,16 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Lazy-loaded singleton to avoid circular imports
+_usage_tracker = None
+
+def _get_usage_tracker():
+    global _usage_tracker
+    if _usage_tracker is None:
+        from utils.usage_tracker import UsageTracker
+        _usage_tracker = UsageTracker()
+    return _usage_tracker
+
 class GeminiUnavailableError(Exception):
     pass
 
@@ -87,6 +97,11 @@ class GeminiClient:
                     f"prompt_len={len(user_message)}, response_len={len(text)}, "
                     f"latency={latency:.2f}ms"
                 )
+                # Record usage
+                try:
+                    _get_usage_tracker().record_call(len(user_message), len(text), self.MODEL_NAME)
+                except Exception:
+                    pass
                 return text
             except Exception as e:
                 attempt += 1
@@ -132,6 +147,11 @@ class GeminiClient:
                         f"Gemini JSON Call successful: model={self.MODEL_NAME}, "
                         f"latency={latency:.2f}ms"
                     )
+                    # Record usage
+                    try:
+                        _get_usage_tracker().record_call(len(message_body), len(text), self.MODEL_NAME)
+                    except Exception:
+                        pass
                     return text
                 except Exception as e:
                     attempt += 1

@@ -8,6 +8,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 
+
 class JobScheduler:
     def __init__(self, world_monitor, reflector, memory_manager, whatsapp, knowledge_graph):
         self.scheduler = AsyncIOScheduler(timezone=IST)
@@ -26,7 +27,9 @@ class JobScheduler:
             CronTrigger(hour=brief_hour, minute=brief_min, timezone=IST),
             id="morning_brief",
             name="Morning Intelligence Brief",
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True
         )
 
         # 2. Tech signals scanning interval job
@@ -36,7 +39,9 @@ class JobScheduler:
             hours=settings.monitor_interval_hours,
             id="background_scan",
             name="Background World Scan",
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True
         )
 
         # 3. Nightly self-reflection job
@@ -46,7 +51,9 @@ class JobScheduler:
             CronTrigger(hour=reflect_hour, minute=reflect_min, timezone=IST),
             id="nightly_reflection",
             name="Nightly Self-Reflection",
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True
         )
 
         # 4. Deadline checker interval job
@@ -56,16 +63,26 @@ class JobScheduler:
             hours=settings.deadline_check_interval_hours,
             id="deadline_check",
             name="Deadline & Event Reminder",
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True
         )
 
-        # 5. Memory consolidation job (Sunday 3 AM IST)
+        # 5. Memory consolidation job (configurable day, 3 AM IST)
+        day_map = {
+            "monday": "mon", "tuesday": "tue", "wednesday": "wed",
+            "thursday": "thu", "friday": "fri", "saturday": "sat", "sunday": "sun"
+        }
+        consolidation_day = day_map.get(settings.memory_consolidation_day.lower(), "sun")
+        
         self.scheduler.add_job(
             self.memory_manager.consolidate_memory,
-            CronTrigger(day_of_week="sun", hour=3, minute=0, timezone=IST),
+            CronTrigger(day_of_week=consolidation_day, hour=3, minute=0, timezone=IST),
             id="memory_consolidation",
             name="Weekly Memory Consolidation",
-            replace_existing=True
+            replace_existing=True,
+            misfire_grace_time=3600,
+            coalesce=True
         )
         
         logger.info("All background jobs registered in APScheduler.")

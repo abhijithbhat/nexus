@@ -142,6 +142,41 @@ class KnowledgeGraph:
         finally:
             session.close()
 
+    def find_events_by_title(self, title_query: str) -> list:
+        """Find pending/reminded events matching a title substring (case-insensitive)."""
+        session = self.Session()
+        try:
+            events = session.query(Event).filter(
+                Event.title.ilike(f"%{title_query}%"),
+                Event.status.in_(["pending", "reminded"])
+            ).order_by(Event.scheduled_at.desc()).all()
+            session.expunge_all()
+            return events
+        except Exception as e:
+            logger.error(f"Error finding events by title: {e}")
+            return []
+        finally:
+            session.close()
+
+    def cancel_event(self, event_id: int) -> bool:
+        """Cancel an event by setting its status to 'cancelled'."""
+        session = self.Session()
+        try:
+            event = session.query(Event).filter(Event.id == event_id).first()
+            if event:
+                event.status = "cancelled"
+                session.commit()
+                logger.info(f"Cancelled event {event_id}: {event.title}")
+                return True
+            logger.warning(f"Event {event_id} not found to cancel")
+            return False
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error cancelling event: {e}")
+            return False
+        finally:
+            session.close()
+
     def add_reflection(self, content: str, insights: dict):
         session = self.Session()
         try:
